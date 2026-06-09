@@ -1,15 +1,20 @@
 """Gridlock FastAPI application."""
 
+import asyncio
+import os
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from gridlock.models import Capability, Job, JobStatus, Worker, WorkerStatus
 from gridlock import redis_backend as rb
 
+HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("GRIDLOCK_HEARTBEAT_INTERVAL", "10"))
+
 app = FastAPI(
     title="Gridlock",
     description="Distributed task queue with capability matching",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 
@@ -118,3 +123,89 @@ async def match_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Job not found")
     matches = rb.find_matching_workers(job_id)
     return {"job_id": job_id, "matches": matches, "match_count": len(matches)}
+
+
+@app.get("/workers/{worker_id}/health")
+async def get_worker_health(worker_id: str) -> dict:
+    """Get the health status of a specific worker."""
+    worker = rb.get_worker(worker_id)
+    if worker is None:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    stale = rb.get_stale_workers()
+    is_stale = any(w.id == worker_id for w in stale)
+    return {
+        "worker_id": worker_id,
+        "status": worker.status.value,
+        "healthy": worker.status != WorkerStatus.OFFLINE and not is_stale,
+        "last_heartbeat": worker.last_heartbeat.isoformat(),
+    }
+
+
+@app.get("/health/workers")
+async def get_all_workers_health() -> dict:
+    """Get health status summary for all workers."""
+    workers = rb.list_workers()
+    stale = rb.get_stale_workers()
+    stale_ids = {w.id for w in stale}
+    summary = []
+    for worker in workers:
+        is_stale = worker.id in stale_ids
+        summary.append({
+            "worker_id": worker.id,
+            "status": worker.status.value,
+            "healthy": worker.status != WorkerStatus.OFFLINE and not is_stale,
+            "last_heartbeat": worker.last_heartbeat.isoformat(),
+        })
+    healthy_count = sum(1 for s in summary if s["healthy"])
+    return {
+        "total": len(summary),
+        "healthy": healthy_count,
+        "unhealthy": len(summary) - healthy_count,
+        "workers": summary,
+    }
+
+
+@app.post("/health/check", response_model=dict)
+async def run_health_check() -> dict:
+    """Manually trigger a health check to mark stale workers offline."""
+    affected = rb.check_and_mark_stale_workers()
+    return {"stale_workers_marked_offline": affected, "count": len(affected)}
+
+
+# ---------------------------------------------------------------------------
+# Background heartbeat monitor
+# ---------------------------------------------------------------------------
+
+_monitor_task: asyncio.Task | None = None
+
+
+async def _heartbeat_monitor() -> None:
+    """Background task that periodically checks for stale workers."""
+    while True:
+        try:
+            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            rb.check_and_mark_stale_workers()
+        except Exception:
+            # Prevent monitor crash from bringing down the app
+            pass
+
+
+@app.on_event("startup")
+async def _start_monitor() -> None:
+    """Start the background heartbeat monitor on application startup."""
+    global _monitor_task
+    if _monitor_task is None or _monitor_task.done():
+        _monitor_task = asyncio.create_task(_heartbeat_monitor())
+
+
+@app.on_event("shutdown")
+async def _stop_monitor() -> None:
+    """Stop the background heartbeat monitor on application shutdown."""
+    global _monitor_task
+    if _monitor_task is not None and not _monitor_task.done():
+        _monitor_task.cancel()
+        try:
+            await _monitor_task
+        except asyncio.CancelledError:
+            pass
+        _monitor_task = None

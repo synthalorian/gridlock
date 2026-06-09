@@ -8,11 +8,12 @@ Uses Redis lists and sorted sets for queue management:
 
 import json
 import os
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import redis
 
-from gridlock.models import Job, JobStatus, Worker
+from gridlock.models import Job, JobStatus, Worker, WorkerStatus
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _redis_client: redis.Redis | None = None
@@ -223,6 +224,51 @@ def get_queue_contents() -> list[str]:
     """Get all job IDs in the FIFO queue without removing them."""
     r = get_redis()
     return r.lrange("gridlock:queue:fifo", 0, -1)
+
+
+# ---------------------------------------------------------------------------
+# Health check / heartbeat
+# ---------------------------------------------------------------------------
+
+HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("GRIDLOCK_HEARTBEAT_TIMEOUT", "30"))
+
+
+def get_workers_by_status(status: WorkerStatus) -> list[Worker]:
+    """Get all workers with the given status."""
+    workers = list_workers()
+    return [w for w in workers if w.status == status]
+
+
+def get_stale_workers(timeout_seconds: int = HEARTBEAT_TIMEOUT_SECONDS) -> list[Worker]:
+    """Find workers whose last heartbeat is older than timeout_seconds."""
+    cutoff = datetime.now(UTC) - timedelta(seconds=timeout_seconds)
+    workers = list_workers()
+    stale = []
+    for worker in workers:
+        if worker.last_heartbeat < cutoff:
+            stale.append(worker)
+    return stale
+
+
+def mark_worker_offline(worker_id: str) -> Worker | None:
+    """Mark a worker as offline."""
+    worker = get_worker(worker_id)
+    if worker is None:
+        return None
+    worker.status = WorkerStatus.OFFLINE
+    worker.current_job_id = None
+    return update_worker(worker)
+
+
+def check_and_mark_stale_workers(timeout_seconds: int = HEARTBEAT_TIMEOUT_SECONDS) -> list[str]:
+    """Find stale workers and mark them offline. Returns list of worker IDs affected."""
+    stale = get_stale_workers(timeout_seconds)
+    affected = []
+    for worker in stale:
+        if worker.status != WorkerStatus.OFFLINE:
+            mark_worker_offline(worker.id)
+            affected.append(worker.id)
+    return affected
 
 
 # ---------------------------------------------------------------------------

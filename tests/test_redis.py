@@ -196,6 +196,78 @@ class TestQueueOperations:
         assert contents == ["job-1", "job-0"]  # lpush order
 
 
+class TestHealthCheck:
+    """Heartbeat health check operations via Redis backend."""
+
+    def test_get_workers_by_status(self):
+        rb.create_worker(Worker(id="worker-1", status=WorkerStatus.AVAILABLE))
+        rb.create_worker(Worker(id="worker-2", status=WorkerStatus.BUSY))
+        rb.create_worker(Worker(id="worker-3", status=WorkerStatus.OFFLINE))
+        available = rb.get_workers_by_status(WorkerStatus.AVAILABLE)
+        assert len(available) == 1
+        assert available[0].id == "worker-1"
+        busy = rb.get_workers_by_status(WorkerStatus.BUSY)
+        assert len(busy) == 1
+        assert busy[0].id == "worker-2"
+
+    def test_get_stale_workers_empty(self):
+        worker = Worker(id="worker-1")
+        rb.create_worker(worker)
+        stale = rb.get_stale_workers(timeout_seconds=30)
+        assert stale == []
+
+    def test_get_stale_workers_found(self):
+        from datetime import UTC, datetime, timedelta
+        old_time = datetime.now(UTC) - timedelta(seconds=60)
+        worker = Worker(id="worker-1", last_heartbeat=old_time)
+        rb.create_worker(worker)
+        stale = rb.get_stale_workers(timeout_seconds=30)
+        assert len(stale) == 1
+        assert stale[0].id == "worker-1"
+
+    def test_mark_worker_offline(self):
+        worker = Worker(id="worker-1", status=WorkerStatus.AVAILABLE)
+        rb.create_worker(worker)
+        result = rb.mark_worker_offline("worker-1")
+        assert result is not None
+        assert result.status == WorkerStatus.OFFLINE
+        fetched = rb.get_worker("worker-1")
+        assert fetched.status == WorkerStatus.OFFLINE
+
+    def test_mark_worker_offline_clears_job(self):
+        worker = Worker(id="worker-1", status=WorkerStatus.BUSY, current_job_id="job-1")
+        rb.create_worker(worker)
+        result = rb.mark_worker_offline("worker-1")
+        assert result.current_job_id is None
+
+    def test_mark_worker_offline_not_found(self):
+        assert rb.mark_worker_offline("nonexistent") is None
+
+    def test_check_and_mark_stale_workers(self):
+        from datetime import UTC, datetime, timedelta
+        old_time = datetime.now(UTC) - timedelta(seconds=60)
+        worker = Worker(id="worker-1", status=WorkerStatus.AVAILABLE, last_heartbeat=old_time)
+        rb.create_worker(worker)
+        affected = rb.check_and_mark_stale_workers(timeout_seconds=30)
+        assert affected == ["worker-1"]
+        fetched = rb.get_worker("worker-1")
+        assert fetched.status == WorkerStatus.OFFLINE
+
+    def test_check_and_mark_stale_workers_skips_already_offline(self):
+        from datetime import UTC, datetime, timedelta
+        old_time = datetime.now(UTC) - timedelta(seconds=60)
+        worker = Worker(id="worker-1", status=WorkerStatus.OFFLINE, last_heartbeat=old_time)
+        rb.create_worker(worker)
+        affected = rb.check_and_mark_stale_workers(timeout_seconds=30)
+        assert affected == []
+
+    def test_check_and_mark_stale_workers_no_stale(self):
+        worker = Worker(id="worker-1", status=WorkerStatus.AVAILABLE)
+        rb.create_worker(worker)
+        affected = rb.check_and_mark_stale_workers(timeout_seconds=30)
+        assert affected == []
+
+
 class TestCleanup:
     """Cleanup helpers."""
 
