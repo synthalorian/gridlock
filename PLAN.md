@@ -78,12 +78,16 @@ Distributed task queue with capability matching. Workers announce what they can 
 **Goal:** Full job lifecycle: dispatch, execute, complete/fail
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation (`gridlock/redis_backend.py` dispatch/complete/fail/cancel/auto_dispatch)
+- [x] API endpoints (`gridlock/main.py` - 5 new endpoints)
+- [x] Tests (`tests/test_dispatch.py` - 37 tests, `tests/test_main.py` - 13 new lifecycle tests)
+- [x] Documentation update (README.md)
 
 **Notes:**
-- 
+- Dispatch validates job is pending, worker is available, and capabilities match
+- Auto-dispatch uses ranked matching to pick the best worker for highest priority job
+- Complete/fail/cancel all release the worker back to available status
+- 193 total tests passing 
 
 ---
 

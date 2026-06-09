@@ -449,3 +449,390 @@ class TestCompatibilityGraph:
         assert "worker-offline" not in data["workers"]
         assert len(data["edges"]) == 1
         assert data["edges"][0]["worker_id"] == "worker-online"
+
+
+class TestDispatchLifecycle:
+    """Job dispatch and execution lifecycle endpoint tests."""
+
+    def test_dispatch_with_specific_worker(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        response = client.post(
+            f"/jobs/{job_id}/dispatch",
+            json={"worker_id": "worker-gpu"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"
+        assert data["worker_id"] == "worker-gpu"
+        assert data["started_at"] is not None
+
+    def test_dispatch_auto_match(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        response = client.post(f"/jobs/{job_id}/dispatch", json={})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "running"
+        assert data["worker_id"] == "worker-gpu"
+
+    def test_dispatch_job_not_found(self):
+        response = client.post("/jobs/nonexistent/dispatch", json={"worker_id": "worker-1"})
+        assert response.status_code == 404
+
+    def test_dispatch_worker_not_found(self):
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+        response = client.post(
+            f"/jobs/{job_id}/dispatch",
+            json={"worker_id": "nonexistent"},
+        )
+        assert response.status_code == 409
+
+    def test_dispatch_job_not_pending(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+        client.post(f"/jobs/{job_id}/dispatch", json={})
+
+        response = client.post(
+            f"/jobs/{job_id}/dispatch",
+            json={"worker_id": "worker-gpu"},
+        )
+        assert response.status_code == 409
+
+    def test_dispatch_no_matching_workers(self):
+        client.post("/workers", json={"id": "worker-cpu"})
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        response = client.post(f"/jobs/{job_id}/dispatch", json={})
+        assert response.status_code == 409
+
+    def test_complete_job(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+        client.post(f"/jobs/{job_id}/dispatch", json={})
+
+        response = client.post(
+            f"/jobs/{job_id}/complete",
+            json={"result": {"accuracy": 0.95}},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["result"] == {"accuracy": 0.95}
+        assert data["completed_at"] is not None
+
+        worker_resp = client.get("/workers/worker-gpu")
+        assert worker_resp.json()["status"] == "available"
+        assert worker_resp.json()["current_job_id"] is None
+
+    def test_complete_job_not_found(self):
+        response = client.post("/jobs/nonexistent/complete", json={})
+        assert response.status_code == 404
+
+    def test_complete_job_not_running(self):
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+        response = client.post(f"/jobs/{job_id}/complete", json={})
+        assert response.status_code == 409
+
+    def test_fail_job(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+        client.post(f"/jobs/{job_id}/dispatch", json={})
+
+        response = client.post(
+            f"/jobs/{job_id}/fail",
+            json={"error": "Out of memory"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "failed"
+        assert data["error"] == "Out of memory"
+        assert data["completed_at"] is not None
+
+        worker_resp = client.get("/workers/worker-gpu")
+        assert worker_resp.json()["status"] == "available"
+
+    def test_fail_job_not_found(self):
+        response = client.post("/jobs/nonexistent/fail", json={})
+        assert response.status_code == 404
+
+    def test_fail_job_not_running(self):
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+        response = client.post(f"/jobs/{job_id}/fail", json={})
+        assert response.status_code == 409
+
+    def test_cancel_pending_job(self):
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+
+        response = client.post(f"/jobs/{job_id}/cancel")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "cancelled"
+        assert data["completed_at"] is not None
+
+    def test_cancel_running_job(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+        client.post(f"/jobs/{job_id}/dispatch", json={})
+
+        response = client.post(f"/jobs/{job_id}/cancel")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "cancelled"
+
+        worker_resp = client.get("/workers/worker-gpu")
+        assert worker_resp.json()["status"] == "available"
+        assert worker_resp.json()["current_job_id"] is None
+
+    def test_cancel_job_not_found(self):
+        response = client.post("/jobs/nonexistent/cancel")
+        assert response.status_code == 404
+
+    def test_cancel_already_completed(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+        client.post(f"/jobs/{job_id}/dispatch", json={})
+        client.post(f"/jobs/{job_id}/complete", json={})
+
+        response = client.post(f"/jobs/{job_id}/cancel")
+        assert response.status_code == 409
+
+    def test_auto_dispatch_endpoint(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+
+        response = client.post("/dispatch/auto")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["dispatched"] is True
+        assert "job_id" in data
+        assert data["worker_id"] == "worker-gpu"
+
+    def test_auto_dispatch_no_jobs(self):
+        response = client.post("/dispatch/auto")
+        assert response.status_code == 409
+
+    def test_auto_dispatch_no_matching_workers(self):
+        client.post("/workers", json={"id": "worker-cpu"})
+        client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+
+        response = client.post("/dispatch/auto")
+        assert response.status_code == 409
+
+    def test_full_lifecycle(self):
+        """Test the full job lifecycle: create -> dispatch -> complete."""
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        job_resp = client.get(f"/jobs/{job_id}")
+        assert job_resp.json()["status"] == "pending"
+
+        dispatch_resp = client.post(f"/jobs/{job_id}/dispatch", json={})
+        assert dispatch_resp.json()["status"] == "running"
+        assert dispatch_resp.json()["worker_id"] == "worker-gpu"
+
+        worker_resp = client.get("/workers/worker-gpu")
+        assert worker_resp.json()["status"] == "busy"
+        assert worker_resp.json()["current_job_id"] == job_id
+
+        complete_resp = client.post(
+            f"/jobs/{job_id}/complete",
+            json={"result": {"accuracy": 0.95}},
+        )
+        assert complete_resp.json()["status"] == "completed"
+        assert complete_resp.json()["result"] == {"accuracy": 0.95}
+
+        worker_resp = client.get("/workers/worker-gpu")
+        assert worker_resp.json()["status"] == "available"
+        assert worker_resp.json()["current_job_id"] is None
+
+    def test_full_lifecycle_with_failure(self):
+        """Test the full job lifecycle with failure: create -> dispatch -> fail."""
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        client.post(f"/jobs/{job_id}/dispatch", json={})
+
+        fail_resp = client.post(
+            f"/jobs/{job_id}/fail",
+            json={"error": "CUDA out of memory"},
+        )
+        assert fail_resp.json()["status"] == "failed"
+        assert fail_resp.json()["error"] == "CUDA out of memory"
+
+        worker_resp = client.get("/workers/worker-gpu")
+        assert worker_resp.json()["status"] == "available"
+
+    def test_full_lifecycle_with_cancel(self):
+        """Test the full job lifecycle with cancellation: create -> dispatch -> cancel."""
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train-model",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        client.post(f"/jobs/{job_id}/dispatch", json={})
+
+        cancel_resp = client.post(f"/jobs/{job_id}/cancel")
+        assert cancel_resp.json()["status"] == "cancelled"
+
+        worker_resp = client.get("/workers/worker-gpu")
+        assert worker_resp.json()["status"] == "available"

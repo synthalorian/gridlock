@@ -25,8 +25,8 @@
 - [x] Phase 1: FastAPI scaffold + Pydantic models (Job, Worker, Capability)
 - [x] Phase 2: Redis queue backend (lists + sorted sets)
 - [x] Phase 3: Worker registration and heartbeat protocol
-- [ ] Phase 4: Capability matching engine (graph-based scoring)
-- [ ] Phase 5: Job dispatch and execution lifecycle
+- [x] Phase 4: Capability matching engine (graph-based scoring)
+- [x] Phase 5: Job dispatch and execution lifecycle
 - [ ] Phase 6: WebSocket progress streaming
 - [ ] Phase 7: Retry logic and dead letter queue
 - [ ] Phase 8: Control plane UI (FastAPI static)
@@ -53,6 +53,26 @@
 - **Redis Backend**: Added `get_stale_workers()`, `mark_worker_offline()`, `check_and_mark_stale_workers()` for health management
 - **Tests**: 17 new health check tests covering stale detection, offline marking, and API endpoints
 - **Run**: Same command, monitor starts automatically with the app
+
+### Phase 4 Complete
+
+- **Capability Matching Engine**: Graph-based scoring with `matcher.py` for job-to-worker compatibility
+- **Match Scoring**: Per-capability scoring with capacity bonuses (exceeding requirements gives higher scores)
+- **Ranked Matches**: `GET /match/{job_id}/ranked` returns workers sorted by match quality
+- **Compatibility Graph**: `GET /graph/compatibility` returns full bipartite graph for visualization
+- **Tests**: 29 matcher tests covering scoring algorithms, capacity bonuses, and graph construction
+
+### Phase 5 Complete
+
+- **Job Dispatch**: `POST /jobs/{job_id}/dispatch` assigns a pending job to an available worker (auto-match or specify worker_id)
+- **Auto-Dispatch**: `POST /dispatch/auto` automatically dispatches the highest priority job to the best matching worker
+- **Job Completion**: `POST /jobs/{job_id}/complete` marks a running job as completed with optional result payload
+- **Job Failure**: `POST /jobs/{job_id}/fail` marks a running job as failed with error message
+- **Job Cancellation**: `POST /jobs/{job_id}/cancel` cancels a pending or running job
+- **Worker Release**: Completing, failing, or cancelling a running job automatically releases the worker back to available status
+- **Redis Backend**: Added `dispatch_job()`, `complete_job()`, `fail_job()`, `cancel_job()`, `auto_dispatch()`, `get_next_dispatchable_job()`
+- **Tests**: 50 new dispatch and lifecycle tests covering success paths, error conditions, and full lifecycles
+- **Total Tests**: 193 tests passing
 
 ---
 

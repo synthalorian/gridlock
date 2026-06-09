@@ -41,12 +41,12 @@ def _worker_key(worker_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 def create_job(job: Job) -> Job:
-    """Store a job in Redis and add it to the pending queue."""
+    """Store a job in Redis and add it to the pending queue if status is pending."""
     r = get_redis()
     job_json = job.model_dump_json()
     r.set(_job_key(job.id), job_json)
-    # Add to pending sorted set with priority as score (higher = first)
-    r.zadd("gridlock:jobs:pending", {job.id: -job.priority})
+    if job.status == JobStatus.PENDING:
+        r.zadd("gridlock:jobs:pending", {job.id: -job.priority})
     return job
 
 
@@ -290,6 +290,158 @@ def check_and_mark_stale_workers(timeout_seconds: int = HEARTBEAT_TIMEOUT_SECOND
             mark_worker_offline(worker.id)
             affected.append(worker.id)
     return affected
+
+
+# ---------------------------------------------------------------------------
+# Job dispatch and execution lifecycle
+# ---------------------------------------------------------------------------
+
+def dispatch_job(job_id: str, worker_id: str) -> Job | None:
+    """Dispatch a pending job to an available worker.
+
+    Updates job status to RUNNING, assigns worker_id, sets started_at.
+    Updates worker status to BUSY, sets current_job_id.
+    Returns the updated job or None if dispatch failed.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return None
+    if job.status != JobStatus.PENDING:
+        return None
+
+    worker = get_worker(worker_id)
+    if worker is None:
+        return None
+    if worker.status != WorkerStatus.AVAILABLE:
+        return None
+    if not job.can_run_on(worker):
+        return None
+
+    job.status = JobStatus.RUNNING
+    job.worker_id = worker_id
+    job.started_at = datetime.now(UTC)
+    update_job(job)
+
+    worker.status = WorkerStatus.BUSY
+    worker.current_job_id = job_id
+    update_worker(worker)
+
+    return job
+
+
+def complete_job(job_id: str, result: dict[str, Any] | None = None) -> Job | None:
+    """Mark a running job as completed and release its worker.
+
+    Returns the updated job or None if the job was not found or not running.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return None
+    if job.status != JobStatus.RUNNING:
+        return None
+
+    job.status = JobStatus.COMPLETED
+    job.completed_at = datetime.now(UTC)
+    job.result = result or {}
+    update_job(job)
+
+    if job.worker_id:
+        _release_worker(job.worker_id)
+
+    return job
+
+
+def fail_job(job_id: str, error: str | None = None) -> Job | None:
+    """Mark a running job as failed and release its worker.
+
+    Returns the updated job or None if the job was not found or not running.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return None
+    if job.status != JobStatus.RUNNING:
+        return None
+
+    job.status = JobStatus.FAILED
+    job.completed_at = datetime.now(UTC)
+    job.error = error or "Unknown error"
+    update_job(job)
+
+    if job.worker_id:
+        _release_worker(job.worker_id)
+
+    return job
+
+
+def cancel_job(job_id: str) -> Job | None:
+    """Cancel a pending or running job and release its worker if running.
+
+    Returns the updated job or None if the job was not found or already terminal.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return None
+    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+        return None
+
+    was_running = job.status == JobStatus.RUNNING
+    job.status = JobStatus.CANCELLED
+    job.completed_at = datetime.now(UTC)
+    update_job(job)
+
+    if was_running and job.worker_id:
+        _release_worker(job.worker_id)
+
+    return job
+
+
+def _release_worker(worker_id: str) -> Worker | None:
+    """Mark a worker as available and clear its current job assignment."""
+    worker = get_worker(worker_id)
+    if worker is None:
+        return None
+    worker.status = WorkerStatus.AVAILABLE
+    worker.current_job_id = None
+    return update_worker(worker)
+
+
+def get_next_dispatchable_job() -> Job | None:
+    """Find the highest priority pending job that has at least one available matching worker.
+
+    Returns the job or None if no dispatchable jobs exist.
+    """
+    pending = get_pending_jobs()
+    available_workers = [w for w in list_workers() if w.status == WorkerStatus.AVAILABLE]
+
+    for job in pending:
+        for worker in available_workers:
+            if job.can_run_on(worker):
+                return job
+    return None
+
+
+def auto_dispatch() -> dict[str, str] | None:
+    """Automatically dispatch the highest priority pending job to the best matching worker.
+
+    Returns a dict with job_id and worker_id on success, or None if no dispatch occurred.
+    """
+    job = get_next_dispatchable_job()
+    if job is None:
+        return None
+
+    from gridlock.matcher import find_best_matches
+
+    available_workers = [w for w in list_workers() if w.status == WorkerStatus.AVAILABLE]
+    matches = find_best_matches(job, available_workers, min_score=0.0)
+    if not matches:
+        return None
+
+    best_worker_id = matches[0].worker_id
+    dispatched = dispatch_job(job.id, best_worker_id)
+    if dispatched is None:
+        return None
+
+    return {"job_id": job.id, "worker_id": best_worker_id}
 
 
 # ---------------------------------------------------------------------------

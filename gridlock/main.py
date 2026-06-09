@@ -5,6 +5,7 @@ import os
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import Any
 
 from gridlock.models import Capability, Job, JobStatus, Worker, WorkerStatus
 from gridlock import redis_backend as rb
@@ -15,7 +16,7 @@ HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("GRIDLOCK_HEARTBEAT_INTERVAL", "10"))
 app = FastAPI(
     title="Gridlock",
     description="Distributed task queue with capability matching",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 
@@ -33,6 +34,24 @@ class CreateWorkerRequest(BaseModel):
 
     id: str
     capabilities: list[Capability] | None = None
+
+
+class DispatchJobRequest(BaseModel):
+    """Request body for dispatching a job to a specific worker."""
+
+    worker_id: str | None = None
+
+
+class CompleteJobRequest(BaseModel):
+    """Request body for completing a job."""
+
+    result: dict[str, Any] | None = None
+
+
+class FailJobRequest(BaseModel):
+    """Request body for failing a job."""
+
+    error: str | None = None
 
 
 @app.get("/health")
@@ -69,6 +88,87 @@ async def get_job(job_id: str) -> Job:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.post("/jobs/{job_id}/dispatch", response_model=Job)
+async def dispatch_job(job_id: str, request: DispatchJobRequest) -> Job:
+    """Dispatch a pending job to a worker.
+
+    If worker_id is provided, dispatch to that specific worker.
+    Otherwise, auto-match to the best available worker.
+    """
+    job = rb.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.PENDING:
+        raise HTTPException(status_code=409, detail=f"Job is not pending (status: {job.status.value})")
+
+    worker_id = request.worker_id
+    if worker_id is None:
+        result = rb.auto_dispatch()
+        if result is None:
+            raise HTTPException(status_code=409, detail="No available matching workers found")
+        dispatched = rb.get_job(result["job_id"])
+    else:
+        dispatched = rb.dispatch_job(job_id, worker_id)
+        if dispatched is None:
+            raise HTTPException(status_code=409, detail="Worker not available or does not match job requirements")
+
+    return dispatched
+
+
+@app.post("/jobs/{job_id}/complete", response_model=Job)
+async def complete_job(job_id: str, request: CompleteJobRequest) -> Job:
+    """Mark a running job as completed."""
+    job = rb.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.RUNNING:
+        raise HTTPException(status_code=409, detail=f"Job is not running (status: {job.status.value})")
+
+    completed = rb.complete_job(job_id, result=request.result)
+    if completed is None:
+        raise HTTPException(status_code=409, detail="Failed to complete job")
+    return completed
+
+
+@app.post("/jobs/{job_id}/fail", response_model=Job)
+async def fail_job(job_id: str, request: FailJobRequest) -> Job:
+    """Mark a running job as failed."""
+    job = rb.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.RUNNING:
+        raise HTTPException(status_code=409, detail=f"Job is not running (status: {job.status.value})")
+
+    failed = rb.fail_job(job_id, error=request.error)
+    if failed is None:
+        raise HTTPException(status_code=409, detail="Failed to fail job")
+    return failed
+
+
+@app.post("/jobs/{job_id}/cancel", response_model=Job)
+async def cancel_job(job_id: str) -> Job:
+    """Cancel a pending or running job."""
+    job = rb.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+        raise HTTPException(status_code=409, detail=f"Job is already terminal (status: {job.status.value})")
+
+    cancelled = rb.cancel_job(job_id)
+    if cancelled is None:
+        raise HTTPException(status_code=409, detail="Failed to cancel job")
+    return cancelled
+
+
+@app.post("/dispatch/auto")
+async def auto_dispatch() -> dict:
+    """Automatically dispatch the highest priority pending job to the best matching worker."""
+    result = rb.auto_dispatch()
+    if result is None:
+        raise HTTPException(status_code=409, detail="No dispatchable jobs found")
+    return {"dispatched": True, "job_id": result["job_id"], "worker_id": result["worker_id"]}
 
 
 @app.post("/workers", response_model=Worker, status_code=201)
