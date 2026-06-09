@@ -17,12 +17,14 @@ Distributed task queue with capability matching. Workers announce what they can 
 **Goal:** Set up FastAPI app with Pydantic models for Job, Worker, Capability
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation (`gridlock/models.py`, `gridlock/main.py`)
+- [x] Tests (`tests/test_models.py`, `tests/test_main.py` - 41 tests passing)
+- [x] Documentation update (README.md)
 
 **Notes:**
-- 
+- Capability model supports operators: eq, neq, gt, gte, lt, lte with numeric and string comparison
+- In-memory stores used for Phase 1 (to be replaced with Redis in Phase 2)
+- API endpoints: /jobs, /workers, /match/{job_id}, /workers/{id}/heartbeat
 
 ---
 
@@ -31,12 +33,15 @@ Distributed task queue with capability matching. Workers announce what they can 
 **Goal:** Implement Redis-backed queue using lists and sorted sets
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation (`gridlock/redis_backend.py`)
+- [x] Tests (`tests/test_redis.py` - 26 tests, `tests/test_main.py` updated)
+- [x] Documentation update
 
 **Notes:**
-- 
+- Redis data structures: sorted sets for priority queues (score = -priority), strings (JSON) for job/worker storage, sets for indexing
+- FIFO queue implemented via Redis lists (`lpush`/`rpop`)
+- `fakeredis` used for test isolation (session-scoped fixture for performance)
+- All existing 41 Phase 1 tests still pass, plus 26 new Redis backend tests
 
 ---
 

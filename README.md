@@ -22,15 +22,28 @@
 
 ## Development Plan
 
-1. Phase 1: FastAPI scaffold + Pydantic models (Job, Worker, Capability)
-2. Phase 2: Redis queue backend (lists + sorted sets)
-3. Phase 2: Worker registration and heartbeat protocol
-4. Phase 3: Capability matching engine (graph-based scoring)
-5. Phase 4: Job dispatch and execution lifecycle
-6. Phase 5: WebSocket progress streaming
-7. Phase 6: Retry logic and dead letter queue
-8. Phase 7: Control plane UI (FastAPI static)
-9. Phase 8: Docker compose for full stack
+- [x] Phase 1: FastAPI scaffold + Pydantic models (Job, Worker, Capability)
+- [x] Phase 2: Redis queue backend (lists + sorted sets)
+- [ ] Phase 3: Worker registration and heartbeat protocol
+- [ ] Phase 4: Capability matching engine (graph-based scoring)
+- [ ] Phase 5: Job dispatch and execution lifecycle
+- [ ] Phase 6: WebSocket progress streaming
+- [ ] Phase 7: Retry logic and dead letter queue
+- [ ] Phase 8: Control plane UI (FastAPI static)
+- [ ] Phase 9: Docker compose for full stack
+
+### Phase 1 Complete
+
+- **Models**: `Capability` (with operator-based matching: eq, neq, gt, gte, lt, lte), `Worker` (status, heartbeat, capabilities), `Job` (priority, payload, required capabilities)
+- **API Endpoints**: `POST /jobs`, `GET /jobs`, `GET /jobs/{id}`, `POST /workers`, `GET /workers`, `GET /workers/{id}`, `POST /workers/{id}/heartbeat`, `GET /match/{job_id}`
+- **Tests**: 41 tests covering model validation, capability matching logic, and all API endpoints
+
+### Phase 2 Complete
+
+- **Redis Backend**: `gridlock/redis_backend.py` with full CRUD for jobs and workers
+- **Queue Operations**: Sorted sets for priority queues, lists for FIFO queue, sets for status indexing
+- **Tests**: 26 new Redis backend tests + updated integration tests = 67 total tests
+- **Run**: `uvicorn gridlock.main:app --reload` (requires Redis at `REDIS_URL`)
 
 ---
 
