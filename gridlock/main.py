@@ -3,15 +3,45 @@
 import asyncio
 import os
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field
 from typing import Any
 
-from gridlock.models import Capability, Job, JobStatus, Worker, WorkerStatus
+from gridlock.models import Capability, Job, JobStatus, ProgressUpdate, Worker, WorkerStatus
 from gridlock import redis_backend as rb
 from gridlock.matcher import MatchResult
 
 HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("GRIDLOCK_HEARTBEAT_INTERVAL", "10"))
+
+
+class _ConnectionManager:
+    """In-memory manager for WebSocket progress streaming connections."""
+
+    def __init__(self):
+        self._connections: dict[str, list[WebSocket]] = {}
+
+    async def connect(self, job_id: str, websocket: WebSocket) -> None:
+        if job_id not in self._connections:
+            self._connections[job_id] = []
+        self._connections[job_id].append(websocket)
+
+    def disconnect(self, job_id: str, websocket: WebSocket) -> None:
+        if job_id in self._connections:
+            self._connections[job_id] = [ws for ws in self._connections[job_id] if ws != websocket]
+            if not self._connections[job_id]:
+                del self._connections[job_id]
+
+    async def broadcast(self, job_id: str, data: dict) -> None:
+        if job_id not in self._connections:
+            return
+        for ws in list(self._connections[job_id]):
+            try:
+                await ws.send_json(data)
+            except Exception:
+                pass
+
+
+_connection_manager = _ConnectionManager()
 
 app = FastAPI(
     title="Gridlock",
@@ -52,6 +82,14 @@ class FailJobRequest(BaseModel):
     """Request body for failing a job."""
 
     error: str | None = None
+
+
+class ProgressUpdateRequest(BaseModel):
+    """Request body for updating job progress."""
+
+    progress: float = Field(..., ge=0.0, le=100.0)
+    message: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @app.get("/health")
@@ -160,6 +198,59 @@ async def cancel_job(job_id: str) -> Job:
     if cancelled is None:
         raise HTTPException(status_code=409, detail="Failed to cancel job")
     return cancelled
+
+
+@app.post("/jobs/{job_id}/progress", response_model=Job)
+async def update_job_progress(job_id: str, request: ProgressUpdateRequest) -> Job:
+    """Update the progress of a running job."""
+    job = rb.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    updated = rb.update_job_progress(
+        job_id,
+        progress=request.progress,
+        message=request.message,
+        metadata=request.metadata,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    from datetime import UTC, datetime
+
+    await _connection_manager.broadcast(
+        job_id,
+        {
+            "job_id": job_id,
+            "progress": request.progress,
+            "message": request.message,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "metadata": request.metadata,
+        },
+    )
+    return updated
+
+
+@app.websocket("/ws/jobs/{job_id}/progress")
+async def job_progress_websocket(websocket: WebSocket, job_id: str) -> None:
+    """Stream real-time progress updates for a specific job via WebSocket."""
+    job = rb.get_job(job_id)
+    if job is None:
+        await websocket.close(code=4004, reason="Job not found")
+        return
+
+    await websocket.accept()
+    await _connection_manager.connect(job_id, websocket)
+    try:
+        while True:
+            try:
+                message = await websocket.receive_text()
+                if message == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+    finally:
+        _connection_manager.disconnect(job_id, websocket)
 
 
 @app.post("/dispatch/auto")

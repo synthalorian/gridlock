@@ -836,3 +836,78 @@ class TestDispatchLifecycle:
 
         worker_resp = client.get("/workers/worker-gpu")
         assert worker_resp.json()["status"] == "available"
+
+
+class TestProgressStreaming:
+    """WebSocket progress streaming tests."""
+
+    def test_update_progress_rest(self):
+        """Update job progress via REST endpoint."""
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+
+        progress_resp = client.post(
+            f"/jobs/{job_id}/progress",
+            json={"progress": 42.5, "message": "Processing batch 3 of 10"},
+        )
+        assert progress_resp.status_code == 200
+        data = progress_resp.json()
+        assert data["progress"] == 42.5
+        assert data["id"] == job_id
+
+        job_resp = client.get(f"/jobs/{job_id}")
+        assert job_resp.json()["progress"] == 42.5
+
+    def test_update_progress_not_found(self):
+        """Progress update for non-existent job returns 404."""
+        response = client.post(
+            "/jobs/nonexistent/progress",
+            json={"progress": 50.0},
+        )
+        assert response.status_code == 404
+
+    def test_update_progress_invalid_range(self):
+        """Progress outside 0-100 range is rejected."""
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+
+        response = client.post(
+            f"/jobs/{job_id}/progress",
+            json={"progress": 150.0},
+        )
+        assert response.status_code == 422
+
+    def test_websocket_progress_streaming(self):
+        """WebSocket receives real-time progress updates."""
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+
+        with client.websocket_connect(f"/ws/jobs/{job_id}/progress") as ws:
+            client.post(f"/jobs/{job_id}/progress", json={"progress": 25.0, "message": "Step 1"})
+            data = ws.receive_json()
+            assert data["job_id"] == job_id
+            assert data["progress"] == 25.0
+            assert data["message"] == "Step 1"
+
+            client.post(f"/jobs/{job_id}/progress", json={"progress": 75.0, "message": "Step 3"})
+            data = ws.receive_json()
+            assert data["progress"] == 75.0
+            assert data["message"] == "Step 3"
+
+    def test_websocket_job_not_found(self):
+        """WebSocket connection for non-existent job is rejected."""
+        from starlette.websockets import WebSocketDisconnect
+
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/jobs/nonexistent/progress") as ws:
+                ws.receive_text()
+
+    def test_websocket_ping_pong(self):
+        """WebSocket responds to ping messages."""
+        create_resp = client.post("/jobs", json={"name": "train-model"})
+        job_id = create_resp.json()["id"]
+
+        with client.websocket_connect(f"/ws/jobs/{job_id}/progress") as ws:
+            ws.send_text("ping")
+            response = ws.receive_text()
+            assert response == "pong"

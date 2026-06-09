@@ -27,7 +27,7 @@
 - [x] Phase 3: Worker registration and heartbeat protocol
 - [x] Phase 4: Capability matching engine (graph-based scoring)
 - [x] Phase 5: Job dispatch and execution lifecycle
-- [ ] Phase 6: WebSocket progress streaming
+- [x] Phase 6: WebSocket progress streaming
 - [ ] Phase 7: Retry logic and dead letter queue
 - [ ] Phase 8: Control plane UI (FastAPI static)
 - [ ] Phase 9: Docker compose for full stack
@@ -73,6 +73,15 @@
 - **Redis Backend**: Added `dispatch_job()`, `complete_job()`, `fail_job()`, `cancel_job()`, `auto_dispatch()`, `get_next_dispatchable_job()`
 - **Tests**: 50 new dispatch and lifecycle tests covering success paths, error conditions, and full lifecycles
 - **Total Tests**: 193 tests passing
+
+### Phase 6 Complete
+
+- **Progress Updates**: `POST /jobs/{job_id}/progress` updates a job's progress percentage (0-100) with optional status message and metadata
+- **WebSocket Streaming**: `WS /ws/jobs/{job_id}/progress` streams real-time progress updates to connected clients
+- **In-Memory Broadcasting**: WebSocket connections are managed in-memory for reliable real-time delivery; Redis pub/sub also available for cross-server setups
+- **Ping/Pong**: WebSocket connections support `ping` messages for keepalive
+- **Tests**: 6 new progress streaming tests covering REST updates, WebSocket streaming, invalid ranges, and not-found handling
+- **Total Tests**: 199 tests passing
 
 ---
 

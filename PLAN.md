@@ -96,12 +96,14 @@ Distributed task queue with capability matching. Workers announce what they can 
 **Goal:** Real-time progress updates via WebSocket
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation (`gridlock/models.py` ProgressUpdate model + progress field, `gridlock/redis_backend.py` update/publish/subscribe, `gridlock/main.py` REST + WS endpoints)
+- [x] Tests (`tests/test_main.py` - 6 new progress streaming tests)
+- [x] Documentation update (README.md)
 
 **Notes:**
-- 
+- In-memory WebSocket connection manager for reliable real-time broadcasting within a single server
+- Redis pub/sub available for cross-server progress broadcasting
+- WebSocket endpoint supports ping/pong keepalive
 
 ---
 

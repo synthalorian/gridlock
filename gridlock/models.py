@@ -83,6 +83,18 @@ class Worker(BaseModel):
     model_config = {"json_schema_extra": {"examples": [{"id": "worker-1", "capabilities": [{"name": "gpu", "value": "nvidia-a100", "operator": "eq"}], "status": "available"}]}}
 
 
+class ProgressUpdate(BaseModel):
+    """A real-time progress update for a running job."""
+
+    job_id: str = Field(..., description="Job identifier")
+    progress: float = Field(..., ge=0.0, le=100.0, description="Progress percentage (0-100)")
+    message: str | None = Field(default=None, description="Optional status message")
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    metadata: dict[str, Any] | None = Field(default=None, description="Optional extra data")
+
+    model_config = {"json_schema_extra": {"examples": [{"job_id": "job-1", "progress": 42.5, "message": "Processing batch 3 of 10", "metadata": {"batch": 3, "total_batches": 10}}]}}
+
+
 class Job(BaseModel):
     """A unit of work to be dispatched to a matching worker."""
 
@@ -98,6 +110,7 @@ class Job(BaseModel):
     completed_at: datetime | None = Field(default=None)
     result: dict[str, Any] | None = Field(default=None)
     error: str | None = Field(default=None)
+    progress: float = Field(default=0.0, ge=0.0, le=100.0, description="Current progress percentage (0-100)")
 
     model_config = {"json_schema_extra": {"examples": [{"id": "job-1", "name": "train-model", "payload": {"epochs": 10}, "required_capabilities": [{"name": "gpu", "value": "1", "operator": "gte"}], "priority": 50}]}}
 

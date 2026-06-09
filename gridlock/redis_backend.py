@@ -13,7 +13,7 @@ from typing import Any
 
 import redis
 
-from gridlock.models import Job, JobStatus, Worker, WorkerStatus
+from gridlock.models import Job, JobStatus, ProgressUpdate, Worker, WorkerStatus
 from gridlock import matcher
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -442,6 +442,64 @@ def auto_dispatch() -> dict[str, str] | None:
         return None
 
     return {"job_id": job.id, "worker_id": best_worker_id}
+
+
+# ---------------------------------------------------------------------------
+# Progress updates (WebSocket streaming)
+# ---------------------------------------------------------------------------
+
+def update_job_progress(job_id: str, progress: float, message: str | None = None, metadata: dict[str, Any] | None = None) -> Job | None:
+    """Update a job's progress percentage and broadcast a progress update.
+
+    Returns the updated job or None if the job was not found.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return None
+
+    job.progress = progress
+    update_job(job)
+
+    update = ProgressUpdate(
+        job_id=job_id,
+        progress=progress,
+        message=message,
+        metadata=metadata,
+    )
+    publish_progress_update(update)
+    return job
+
+
+def _progress_channel(job_id: str) -> str:
+    return f"gridlock:progress:{job_id}"
+
+
+def publish_progress_update(update: ProgressUpdate) -> None:
+    """Publish a progress update to the Redis pub/sub channel for the job."""
+    r = get_redis()
+    channel = _progress_channel(update.job_id)
+    r.publish(channel, update.model_dump_json())
+
+
+def subscribe_progress_updates(job_id: str):
+    """Subscribe to progress updates for a specific job.
+
+    Yields ProgressUpdate objects as they are published.
+    """
+    r = get_redis()
+    pubsub = r.pubsub()
+    channel = _progress_channel(job_id)
+    pubsub.subscribe(channel)
+    try:
+        for message in pubsub.listen():
+            if message["type"] == "message":
+                data = message["data"]
+                if isinstance(data, bytes):
+                    data = data.decode("utf-8")
+                yield ProgressUpdate.model_validate_json(data)
+    finally:
+        pubsub.unsubscribe(channel)
+        pubsub.close()
 
 
 # ---------------------------------------------------------------------------
