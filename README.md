@@ -29,8 +29,8 @@
 - [x] Phase 5: Job dispatch and execution lifecycle
 - [x] Phase 6: WebSocket progress streaming
 - [x] Phase 7: Retry logic and dead letter queue
-- [ ] Phase 8: Control plane UI (FastAPI static)
-- [ ] Phase 9: Docker compose for full stack
+- [x] Phase 8: Control plane UI (FastAPI static)
+- [x] Phase 9: Docker compose for full stack
 
 ### Phase 1 Complete
 
@@ -93,6 +93,25 @@
 - **Tests**: 16 new retry/DLQ tests covering backoff, DLQ membership, retry endpoint, and dispatch timing
 - **Total Tests**: 215 tests passing
 
+### Phase 8 Complete
+
+- **Control Plane UI**: FastAPI serves a static HTML dashboard at `GET /` with real-time job/worker monitoring
+- **Dashboard Features**: Job counts by status, worker health summary, auto-dispatch and health check buttons
+- **Jobs Tab**: Filterable job list with status badges, progress bars, and action buttons (dispatch, cancel, retry)
+- **Workers Tab**: Worker list with capabilities, current job assignment, and heartbeat actions
+- **Create Tab**: Forms to submit new jobs and register workers with JSON capability definitions
+- **Auto-Refresh**: Dashboard polls the API every 5 seconds for live updates
+- **Static Assets**: CSS and JavaScript served from `gridlock/static/` via FastAPI `StaticFiles`
+- **Tests**: 6 new UI tests covering root endpoint, static file serving, and Docker health check compatibility
+
+### Phase 9 Complete
+
+- **Dockerfile**: Multi-stage build with Python 3.11 slim, installs dependencies from `pyproject.toml`, exposes port 8000
+- **Docker Compose**: Full stack deployment with `redis` and `gridlock` services, health checks, and persistent Redis volume
+- **Environment**: `REDIS_URL` configured to connect to Redis service within Docker network
+- **Health Checks**: Docker health check pings `/health` endpoint; Redis health check uses `redis-cli ping`
+- **Run**: `docker compose up --build` starts the complete stack
+
 ---
 
 ## Getting Started
@@ -100,20 +119,23 @@
 ### Prerequisites
 
 - Python 3.11+
-- Redis
+- Redis (or Docker)
 
-### Build
+### Local Development
 
 ```bash
 cd gridlock
 pip install -e ".[dev]"
-```
-
-### Run
-
-```bash
 uvicorn gridlock.main:app --reload
 ```
+
+### Docker Compose
+
+```bash
+docker compose up --build
+```
+
+Visit http://localhost:8000 for the control plane UI.
 
 ---
 

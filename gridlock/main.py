@@ -2,8 +2,11 @@
 
 import asyncio
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Any
 
@@ -48,6 +51,15 @@ app = FastAPI(
     description="Distributed task queue with capability matching",
     version="0.5.0",
 )
+
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> FileResponse:
+    return FileResponse(_static_dir / "index.html")
 
 
 class CreateJobRequest(BaseModel):

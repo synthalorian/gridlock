@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gridlock Control Plane</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Gridlock Control Plane</h1>
+            <p>Distributed task queue with capability matching</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+            <button class="tab-btn" data-tab="jobs">Jobs</button>
+            <button class="tab-btn" data-tab="workers">Workers</button>
+            <button class="tab-btn" data-tab="create">Create</button>
+        </nav>
+
+        <div class="tab-content active" id="dashboard">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Total Jobs</h3>
+                    <div class="stat-value" id="total-jobs">-</div>
+                </div>
+                <div class="stat-card pending">
+                    <h3>Pending</h3>
+                    <div class="stat-value" id="pending-jobs">-</div>
+                </div>
+                <div class="stat-card running">
+                    <h3>Running</h3>
+                    <div class="stat-value" id="running-jobs">-</div>
+                </div>
+                <div class="stat-card completed">
+                    <h3>Completed</h3>
+                    <div class="stat-value" id="completed-jobs">-</div>
+                </div>
+                <div class="stat-card failed">
+                    <h3>Failed</h3>
+                    <div class="stat-value" id="failed-jobs">-</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Workers</h3>
+                    <div class="stat-value" id="total-workers">-</div>
+                </div>
+                <div class="stat-card healthy">
+                    <h3>Healthy Workers</h3>
+                    <div class="stat-value" id="healthy-workers">-</div>
+                </div>
+                <div class="stat-card unhealthy">
+                    <h3>Unhealthy Workers</h3>
+                    <div class="stat-value" id="unhealthy-workers">-</div>
+                </div>
+            </div>
+
+            <div class="actions-bar">
+                <button id="auto-dispatch-btn" class="btn btn-primary">Auto Dispatch</button>
+                <button id="health-check-btn" class="btn btn-secondary">Run Health Check</button>
+                <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
+            </div>
+
+            <div id="dashboard-message" class="message"></div>
+        </div>
+
+        <div class="tab-content" id="jobs">
+            <h2>Jobs</h2>
+            <div class="filter-bar">
+                <select id="job-filter">
+                    <option value="all">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="running">Running</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Failed</option>
+                    <option value="cancelled">Cancelled</option>
+                </select>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Status</th>
+                        <th>Priority</th>
+                        <th>Progress</th>
+                        <th>Worker</th>
+                        <th>Retries</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="jobs-table-body"></tbody>
+            </table>
+        </div>
+
+        <div class="tab-content" id="workers">
+            <h2>Workers</h2>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Status</th>
+                        <th>Capabilities</th>
+                        <th>Current Job</th>
+                        <th>Last Heartbeat</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="workers-table-body"></tbody>
+            </table>
+        </div>
+
+        <div class="tab-content" id="create">
+            <div class="create-sections">
+                <div class="create-form">
+                    <h2>Create Job</h2>
+                    <form id="create-job-form">
+                        <div class="form-group">
+                            <label for="job-name">Name</label>
+                            <input type="text" id="job-name" required placeholder="e.g., train-model">
+                        </div>
+                        <div class="form-group">
+                            <label for="job-priority">Priority (0-100)</label>
+                            <input type="number" id="job-priority" min="0" max="100" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="job-payload">Payload (JSON)</label>
+                            <textarea id="job-payload" rows="3" placeholder='{"epochs": 10}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="job-capabilities">Capabilities (JSON array)</label>
+                            <textarea id="job-capabilities" rows="3" placeholder='[{"name": "gpu", "value": "1", "operator": "gte"}]'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="job-max-retries">Max Retries</label>
+                            <input type="number" id="job-max-retries" min="0" value="0">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Create Job</button>
+                    </form>
+                    <div id="create-job-message" class="message"></div>
+                </div>
+
+                <div class="create-form">
+                    <h2>Create Worker</h2>
+                    <form id="create-worker-form">
+                        <div class="form-group">
+                            <label for="worker-id">Worker ID</label>
+                            <input type="text" id="worker-id" required placeholder="e.g., worker-1">
+                        </div>
+                        <div class="form-group">
+                            <label for="worker-capabilities">Capabilities (JSON array)</label>
+                            <textarea id="worker-capabilities" rows="3" placeholder='[{"name": "gpu", "value": "nvidia-a100", "operator": "eq"}]'></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Create Worker</button>
+                    </form>
+                    <div id="create-worker-message" class="message"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

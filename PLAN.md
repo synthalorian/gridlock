@@ -130,12 +130,15 @@ Distributed task queue with capability matching. Workers announce what they can 
 **Goal:** FastAPI static UI and Docker compose for full stack deployment
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation (`gridlock/static/` HTML/CSS/JS dashboard, `gridlock/main.py` static file serving)
+- [x] Docker setup (`Dockerfile`, `docker-compose.yml`)
+- [x] Tests (`tests/test_ui.py` - 6 tests)
+- [x] Documentation update (README.md)
 
 **Notes:**
-- 
+- Control plane UI served at `GET /` with tabs for Dashboard, Jobs, Workers, and Create
+- Dashboard auto-refreshes every 5 seconds via polling
+- Docker compose includes Redis with health checks and persistent volume 
 
 ---
 
