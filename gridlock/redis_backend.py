@@ -14,6 +14,7 @@ from typing import Any
 import redis
 
 from gridlock.models import Job, JobStatus, Worker, WorkerStatus
+from gridlock import matcher
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _redis_client: redis.Redis | None = None
@@ -191,6 +192,26 @@ def find_matching_workers(job_id: str) -> list[Worker]:
         return []
     workers = list_workers()
     return [w for w in workers if job.can_run_on(w)]
+
+
+def find_ranked_matches(job_id: str, min_score: float = 0.0) -> list[matcher.MatchResult]:
+    """Find workers ranked by match quality score.
+
+    Returns workers sorted by descending match score.
+    Only includes workers with score >= min_score and no missing capabilities.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return []
+    workers = list_workers()
+    return matcher.find_best_matches(job, workers, min_score=min_score)
+
+
+def get_compatibility_graph() -> matcher.CompatibilityGraph:
+    """Build a full compatibility graph for all pending jobs and available workers."""
+    jobs = list_jobs()
+    workers = [w for w in list_workers() if w.status != WorkerStatus.OFFLINE]
+    return matcher.build_compatibility_graph(jobs, workers)
 
 
 # ---------------------------------------------------------------------------

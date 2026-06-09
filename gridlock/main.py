@@ -8,13 +8,14 @@ from pydantic import BaseModel
 
 from gridlock.models import Capability, Job, JobStatus, Worker, WorkerStatus
 from gridlock import redis_backend as rb
+from gridlock.matcher import MatchResult
 
 HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("GRIDLOCK_HEARTBEAT_INTERVAL", "10"))
 
 app = FastAPI(
     title="Gridlock",
     description="Distributed task queue with capability matching",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 
@@ -123,6 +124,46 @@ async def match_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Job not found")
     matches = rb.find_matching_workers(job_id)
     return {"job_id": job_id, "matches": matches, "match_count": len(matches)}
+
+
+@app.get("/match/{job_id}/ranked")
+async def match_job_ranked(job_id: str, min_score: float = 0.0) -> dict:
+    """Find workers ranked by match quality score.
+
+    Query param `min_score` filters out workers below that threshold (default 0.0).
+    """
+    job = rb.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    results = rb.find_ranked_matches(job_id, min_score=min_score)
+    return {
+        "job_id": job_id,
+        "matches": [
+            {
+                "worker_id": r.worker_id,
+                "score": round(r.score, 4),
+                "matched_capabilities": r.matched_capabilities,
+                "missing_capabilities": r.missing_capabilities,
+            }
+            for r in results
+        ],
+        "match_count": len(results),
+    }
+
+
+@app.get("/graph/compatibility")
+async def get_compatibility_graph() -> dict:
+    """Get the full job-worker compatibility graph."""
+    graph = rb.get_compatibility_graph()
+    return {
+        "jobs": graph.job_nodes,
+        "workers": graph.worker_nodes,
+        "edges": [
+            {"job_id": j, "worker_id": w, "score": round(s, 4)}
+            for j, w, s in graph.edges
+        ],
+        "edge_count": len(graph.edges),
+    }
 
 
 @app.get("/workers/{worker_id}/health")

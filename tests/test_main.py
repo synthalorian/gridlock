@@ -246,3 +246,206 @@ class TestMatch:
     def test_match_job_not_found(self):
         response = client.get("/match/nonexistent")
         assert response.status_code == 404
+
+
+class TestRankedMatch:
+    """Ranked capability matching endpoint tests."""
+
+    def test_ranked_match_sorted_by_score(self):
+        # Create workers with varying memory
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-small",
+                "capabilities": [{"name": "memory", "value": "32"}],
+            },
+        )
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-large",
+                "capabilities": [{"name": "memory", "value": "128"}],
+            },
+        )
+        # Create job requiring >= 32GB memory
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "big-task",
+                "required_capabilities": [{"name": "memory", "value": "32", "operator": "gte"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        response = client.get(f"/match/{job_id}/ranked")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["match_count"] == 2
+        # Large worker should be first (higher score due to bonus)
+        assert data["matches"][0]["worker_id"] == "worker-large"
+        assert data["matches"][1]["worker_id"] == "worker-small"
+        assert data["matches"][0]["score"] > data["matches"][1]["score"]
+
+    def test_ranked_match_min_score_filter(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-partial",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-full",
+                "capabilities": [
+                    {"name": "gpu", "value": "nvidia-a100"},
+                    {"name": "os", "value": "linux"},
+                ],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train",
+                "required_capabilities": [
+                    {"name": "gpu", "value": "nvidia-a100"},
+                    {"name": "os", "value": "linux"},
+                ],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        # With min_score=0.6, only worker-full (score=1.0) should appear
+        response = client.get(f"/match/{job_id}/ranked?min_score=0.6")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["match_count"] == 1
+        assert data["matches"][0]["worker_id"] == "worker-full"
+
+    def test_ranked_match_missing_capability_excluded(self):
+        client.post("/workers", json={"id": "worker-cpu"})
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        response = client.get(f"/match/{job_id}/ranked")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["match_count"] == 0
+        assert data["matches"] == []
+
+    def test_ranked_match_job_not_found(self):
+        response = client.get("/match/nonexistent/ranked")
+        assert response.status_code == 404
+
+    def test_ranked_match_response_fields(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-1",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        create_resp = client.post(
+            "/jobs",
+            json={
+                "name": "train",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        job_id = create_resp.json()["id"]
+
+        response = client.get(f"/match/{job_id}/ranked")
+        assert response.status_code == 200
+        data = response.json()
+        match = data["matches"][0]
+        assert "worker_id" in match
+        assert "score" in match
+        assert "matched_capabilities" in match
+        assert "missing_capabilities" in match
+        assert match["worker_id"] == "worker-1"
+        assert match["matched_capabilities"] == ["gpu"]
+        assert match["missing_capabilities"] == []
+
+
+class TestCompatibilityGraph:
+    """Compatibility graph endpoint tests."""
+
+    def test_graph_basic(self):
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-gpu",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        client.post("/workers", json={"id": "worker-cpu"})
+        client.post(
+            "/jobs",
+            json={
+                "name": "train",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+
+        response = client.get("/graph/compatibility")
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        assert "workers" in data
+        assert "edges" in data
+        assert len(data["edges"]) == 1
+        assert data["edges"][0]["job_id"] is not None
+        assert data["edges"][0]["worker_id"] == "worker-gpu"
+        assert data["edges"][0]["score"] == 1.0
+
+    def test_graph_empty(self):
+        response = client.get("/graph/compatibility")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["jobs"] == []
+        assert data["workers"] == []
+        assert data["edges"] == []
+        assert data["edge_count"] == 0
+
+    def test_graph_offline_workers_excluded(self):
+        from datetime import UTC, datetime, timedelta
+        # Create an offline worker
+        old_time = datetime.now(UTC) - timedelta(seconds=60)
+        worker = Worker(
+            id="worker-offline",
+            status=WorkerStatus.OFFLINE,
+            last_heartbeat=old_time,
+            capabilities=[Capability(name="gpu", value="nvidia-a100")],
+        )
+        rb.create_worker(worker)
+        # Create an available worker
+        client.post(
+            "/workers",
+            json={
+                "id": "worker-online",
+                "capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+        client.post(
+            "/jobs",
+            json={
+                "name": "train",
+                "required_capabilities": [{"name": "gpu", "value": "nvidia-a100"}],
+            },
+        )
+
+        response = client.get("/graph/compatibility")
+        assert response.status_code == 200
+        data = response.json()
+        # Only online worker should be in graph
+        assert "worker-online" in data["workers"]
+        assert "worker-offline" not in data["workers"]
+        assert len(data["edges"]) == 1
+        assert data["edges"][0]["worker_id"] == "worker-online"
