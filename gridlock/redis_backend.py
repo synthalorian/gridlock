@@ -36,6 +36,10 @@ def _worker_key(worker_id: str) -> str:
     return f"gridlock:worker:{worker_id}"
 
 
+def _dlq_key() -> str:
+    return "gridlock:jobs:dlq"
+
+
 # ---------------------------------------------------------------------------
 # Job operations
 # ---------------------------------------------------------------------------
@@ -85,6 +89,7 @@ def update_job(job: Job) -> Job:
     r.srem("gridlock:jobs:completed", job.id)
     r.srem("gridlock:jobs:failed", job.id)
     r.srem("gridlock:jobs:cancelled", job.id)
+    r.srem(_dlq_key(), job.id)
 
     # Add to appropriate queue
     if job.status == JobStatus.PENDING:
@@ -95,6 +100,7 @@ def update_job(job: Job) -> Job:
         r.sadd("gridlock:jobs:completed", job.id)
     elif job.status == JobStatus.FAILED:
         r.sadd("gridlock:jobs:failed", job.id)
+        r.sadd(_dlq_key(), job.id)
     elif job.status == JobStatus.CANCELLED:
         r.sadd("gridlock:jobs:cancelled", job.id)
 
@@ -110,6 +116,7 @@ def delete_job(job_id: str) -> bool:
     r.srem("gridlock:jobs:completed", job_id)
     r.srem("gridlock:jobs:failed", job_id)
     r.srem("gridlock:jobs:cancelled", job_id)
+    r.srem(_dlq_key(), job_id)
     return deleted > 0
 
 
@@ -308,6 +315,8 @@ def dispatch_job(job_id: str, worker_id: str) -> Job | None:
         return None
     if job.status != JobStatus.PENDING:
         return None
+    if job.next_retry_at is not None and datetime.now(UTC) < job.next_retry_at:
+        return None
 
     worker = get_worker(worker_id)
     if worker is None:
@@ -352,9 +361,12 @@ def complete_job(job_id: str, result: dict[str, Any] | None = None) -> Job | Non
 
 
 def fail_job(job_id: str, error: str | None = None) -> Job | None:
-    """Mark a running job as failed and release its worker.
+    """Handle a running job failure.
 
-    Returns the updated job or None if the job was not found or not running.
+    If retries remain, the job is returned to PENDING with exponential-backoff
+    scheduling.  Otherwise it is moved to FAILED and added to the dead letter
+    queue.  Returns the updated job or None if the job was not found or not
+    running.
     """
     job = get_job(job_id)
     if job is None:
@@ -362,13 +374,31 @@ def fail_job(job_id: str, error: str | None = None) -> Job | None:
     if job.status != JobStatus.RUNNING:
         return None
 
-    job.status = JobStatus.FAILED
-    job.completed_at = datetime.now(UTC)
-    job.error = error or "Unknown error"
-    update_job(job)
+    error_msg = error or "Unknown error"
 
     if job.worker_id:
         _release_worker(job.worker_id)
+
+    if job.retry_count < job.max_retries:
+        job.retry_count += 1
+        job.errors.append(error_msg)
+        job.error = error_msg
+        job.status = JobStatus.PENDING
+        job.worker_id = None
+        job.started_at = None
+        job.completed_at = None
+        job.progress = 0.0
+        backoff = job.retry_delay_seconds * (2 ** (job.retry_count - 1))
+        job.next_retry_at = datetime.now(UTC) + timedelta(seconds=backoff)
+        update_job(job)
+        return job
+
+    job.status = JobStatus.FAILED
+    job.completed_at = datetime.now(UTC)
+    job.error = error_msg
+    job.errors.append(error_msg)
+    job.next_retry_at = None
+    update_job(job)
 
     return job
 
@@ -412,8 +442,11 @@ def get_next_dispatchable_job() -> Job | None:
     """
     pending = get_pending_jobs()
     available_workers = [w for w in list_workers() if w.status == WorkerStatus.AVAILABLE]
+    now = datetime.now(UTC)
 
     for job in pending:
+        if job.next_retry_at is not None and now < job.next_retry_at:
+            continue
         for worker in available_workers:
             if job.can_run_on(worker):
                 return job
@@ -500,6 +533,67 @@ def subscribe_progress_updates(job_id: str):
     finally:
         pubsub.unsubscribe(channel)
         pubsub.close()
+
+
+# ---------------------------------------------------------------------------
+# Retry and dead letter queue
+# ---------------------------------------------------------------------------
+
+MAX_RETRY_DELAY_SECONDS = int(os.getenv("GRIDLOCK_MAX_RETRY_DELAY_SECONDS", "3600"))
+
+
+def retry_failed_job(job_id: str) -> Job | None:
+    """Move a failed job from the dead letter queue back to PENDING.
+
+    Resets retry state so it can be dispatched again.  Returns the updated job
+    or None if the job was not found or not in a failed state.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return None
+    if job.status != JobStatus.FAILED:
+        return None
+
+    job.status = JobStatus.PENDING
+    job.retry_count = 0
+    job.next_retry_at = None
+    job.completed_at = None
+    job.error = None
+    update_job(job)
+    return job
+
+
+def list_dead_letter_jobs() -> list[Job]:
+    """Return all jobs currently in the dead letter queue."""
+    r = get_redis()
+    job_ids = r.smembers(_dlq_key())
+    jobs = []
+    for job_id in job_ids:
+        job = get_job(job_id)
+        if job is not None:
+            jobs.append(job)
+    return jobs
+
+
+def process_retries(now: datetime | None = None) -> list[str]:
+    """Process jobs whose retry backoff has expired and ensure they are queued.
+
+    Because update_job already adds retried jobs to the pending sorted set,
+    this function currently validates queue consistency and returns the IDs of
+    jobs that are ready for dispatch.  Callers can use it in a background loop.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    r = get_redis()
+    pending = get_pending_jobs()
+    ready: list[str] = []
+    for job in pending:
+        if job.next_retry_at is None:
+            continue
+        if now >= job.next_retry_at:
+            r.zadd("gridlock:jobs:pending", {job.id: -job.priority})
+            ready.append(job.id)
+    return ready
 
 
 # ---------------------------------------------------------------------------

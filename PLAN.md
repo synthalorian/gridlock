@@ -112,12 +112,16 @@ Distributed task queue with capability matching. Workers announce what they can 
 **Goal:** Exponential backoff retry and dead letter queue for failed jobs
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation (`gridlock/models.py` retry fields, `gridlock/redis_backend.py` retry/DLQ logic, `gridlock/main.py` DLQ endpoints)
+- [x] Tests (`tests/test_retry.py` - 16 tests)
+- [x] Documentation update (README.md)
 
 **Notes:**
-- 
+- Job model extended with `retry_count`, `max_retries`, `retry_delay_seconds`, `next_retry_at`, and `errors`
+- `fail_job` automatically retries up to `max_retries` using exponential backoff (`delay * 2^(retry_count-1)`), then moves the job to the dead letter queue
+- `dispatch_job` and `get_next_dispatchable_job` respect `next_retry_at` so retried jobs are not dispatched before their backoff expires
+- New API endpoints: `GET /jobs/dead-letter`, `POST /jobs/{job_id}/retry`
+- `max_retries` defaults to `0` so existing behavior is preserved unless opted-in 
 
 ---
 

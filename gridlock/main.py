@@ -57,6 +57,8 @@ class CreateJobRequest(BaseModel):
     payload: dict | None = None
     required_capabilities: list[Capability] | None = None
     priority: int = 0
+    max_retries: int = 0
+    retry_delay_seconds: int = 1
 
 
 class CreateWorkerRequest(BaseModel):
@@ -108,6 +110,8 @@ async def create_job(request: CreateJobRequest) -> Job:
         payload=request.payload or {},
         required_capabilities=request.required_capabilities or [],
         priority=request.priority,
+        max_retries=request.max_retries,
+        retry_delay_seconds=request.retry_delay_seconds,
     )
     rb.create_job(job)
     return job
@@ -198,6 +202,27 @@ async def cancel_job(job_id: str) -> Job:
     if cancelled is None:
         raise HTTPException(status_code=409, detail="Failed to cancel job")
     return cancelled
+
+
+@app.get("/jobs/dead-letter", response_model=list[Job])
+async def list_dead_letter_jobs() -> list[Job]:
+    """List all jobs currently in the dead letter queue."""
+    return rb.list_dead_letter_jobs()
+
+
+@app.post("/jobs/{job_id}/retry", response_model=Job)
+async def retry_failed_job(job_id: str) -> Job:
+    """Move a failed job from the dead letter queue back to pending for retry."""
+    job = rb.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.FAILED:
+        raise HTTPException(status_code=409, detail=f"Job is not failed (status: {job.status.value})")
+
+    retried = rb.retry_failed_job(job_id)
+    if retried is None:
+        raise HTTPException(status_code=409, detail="Failed to retry job")
+    return retried
 
 
 @app.post("/jobs/{job_id}/progress", response_model=Job)

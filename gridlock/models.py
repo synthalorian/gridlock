@@ -111,6 +111,11 @@ class Job(BaseModel):
     result: dict[str, Any] | None = Field(default=None)
     error: str | None = Field(default=None)
     progress: float = Field(default=0.0, ge=0.0, le=100.0, description="Current progress percentage (0-100)")
+    retry_count: int = Field(default=0, ge=0, description="Number of retry attempts already consumed")
+    max_retries: int = Field(default=0, ge=0, description="Maximum number of automatic retries on failure")
+    retry_delay_seconds: int = Field(default=1, ge=0, description="Base delay for exponential backoff retries")
+    next_retry_at: datetime | None = Field(default=None, description="Earliest time this job is eligible for retry")
+    errors: list[str] = Field(default_factory=list, description="History of error messages from failed attempts")
 
     model_config = {"json_schema_extra": {"examples": [{"id": "job-1", "name": "train-model", "payload": {"epochs": 10}, "required_capabilities": [{"name": "gpu", "value": "1", "operator": "gte"}], "priority": 50}]}}
 

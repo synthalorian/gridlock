@@ -28,7 +28,7 @@
 - [x] Phase 4: Capability matching engine (graph-based scoring)
 - [x] Phase 5: Job dispatch and execution lifecycle
 - [x] Phase 6: WebSocket progress streaming
-- [ ] Phase 7: Retry logic and dead letter queue
+- [x] Phase 7: Retry logic and dead letter queue
 - [ ] Phase 8: Control plane UI (FastAPI static)
 - [ ] Phase 9: Docker compose for full stack
 
@@ -82,6 +82,16 @@
 - **Ping/Pong**: WebSocket connections support `ping` messages for keepalive
 - **Tests**: 6 new progress streaming tests covering REST updates, WebSocket streaming, invalid ranges, and not-found handling
 - **Total Tests**: 199 tests passing
+
+### Phase 7 Complete
+
+- **Retry Fields**: `Job` model now includes `retry_count`, `max_retries`, `retry_delay_seconds`, `next_retry_at`, and `errors`
+- **Automatic Retry**: `POST /jobs/{job_id}/fail` automatically retries failed jobs up to `max_retries` with exponential backoff (`delay * 2^(retry_count - 1)`)
+- **Dead Letter Queue**: Jobs that exhaust retries are added to the DLQ and can be inspected via `GET /jobs/dead-letter`
+- **Manual Retry**: `POST /jobs/{job_id}/retry` moves a failed DLQ job back to pending with reset retry state
+- **Retry Timing**: Dispatch and auto-dispatch respect `next_retry_at` so jobs are not redispatched before their backoff expires
+- **Tests**: 16 new retry/DLQ tests covering backoff, DLQ membership, retry endpoint, and dispatch timing
+- **Total Tests**: 215 tests passing
 
 ---
 
