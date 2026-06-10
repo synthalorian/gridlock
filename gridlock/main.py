@@ -49,7 +49,7 @@ _connection_manager = _ConnectionManager()
 app = FastAPI(
     title="Gridlock",
     description="Distributed task queue with capability matching",
-    version="0.5.0",
+    version="1.0.0",
 )
 
 _static_dir = Path(__file__).parent / "static"
