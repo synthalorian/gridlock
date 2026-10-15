@@ -1,3 +1,5 @@
+![gridlock](.github/preview.png)
+
 # gridlock
 
 > Distributed task queue with capability matching. Workers announce what they can do and the scheduler matches jobs like a dating app.
