@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "redis>=5.0",
     "pydantic>=2.6",
-    "websockets>=12.0",
+    "websockets>=17.3",
 ]
 
 [project.optional-dependencies]
